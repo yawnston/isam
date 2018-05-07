@@ -74,10 +74,7 @@ public:
 			}
 		}
 		// else insert new record to the overflow space (happens when there is no room or the isam is empty)
-		{
-			return add_to_oflow(isam_impl::isam_mem_record<>(key, TValue()));
-			return;
-		}
+		return add_to_oflow(isam_impl::isam_mem_record<>(key, TValue()));
 	}
 
 	isam(size_t block_size, size_t oflow_size) : _block_size(block_size), _oflow_size(oflow_size)
