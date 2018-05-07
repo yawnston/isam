@@ -1,0 +1,14 @@
+Debug
+.vs
+*.swp
+*.swn
+*.sln
+*.db
+*.opendb
+*.vcxproj
+*.filters
+ReadMe.txt
+stdafx.cpp
+stdafx.h
+targetver.h
+Build
