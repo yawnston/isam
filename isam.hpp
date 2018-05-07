@@ -112,7 +112,10 @@ private:
 
 	TValue& add_to_oflow(isam_impl::isam_mem_record<TKey, TValue>&& rec)
 	{
-		// FIXME: what if oflow size is 0?
+		if (_oflow_count == _oflow_size)
+		{
+			push_oflow();
+		}
 	}
 
 	// tries to retrieve given value from the current block, returns nullptr if it fails
