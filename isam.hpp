@@ -292,6 +292,7 @@ public:
 
 		isam_iter(size_t block, typename std::set<isam_impl::isam_record<TKey, TValue>>::iterator o_it, size_t oflow_size) : _block(block), _index_in_block(0), _index_in_oflow(0), _oflow_size(oflow_size)
 		{
+			if (block == 0 && oflow_size == 0) _index_in_block = 1;
 			_block = isam_impl::isam_block<TKey, TValue>(block);
 			_oflow_it = o_it;
 			size_t* skipper = (reinterpret_cast<size_t*>(_block.block) + 2);
@@ -417,8 +418,8 @@ private:
 					new_item = elem.second;
 					// increase the key of this block in the index
 					// insert new_block into the index with the proper key
-					size_t max_l = isam_impl::get_max<TKey, TValue>(_current_block.block);
-					size_t max_r = isam_impl::get_max<TKey, TValue>(new_block.block);
+					TKey max_l = isam_impl::get_max<TKey, TValue>(_current_block.block);
+					TKey max_r = isam_impl::get_max<TKey, TValue>(new_block.block);
 					_index.erase(curr_key);
 					_index[max_l] = _current_block.idx;
 					_index[max_r] = new_block_id;
