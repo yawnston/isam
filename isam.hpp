@@ -182,7 +182,7 @@ template <class TKey, class TValue>
 class isam
 {
 public:
-	TValue& operator[](TKey key)
+	TValue & operator[](TKey key)
 	{
 		// FIXME: iterator and indexer writes at the same time?
 
@@ -222,17 +222,103 @@ public:
 
 	class isam_iter
 	{
-		// TODO
+	public:
+
+		isam_iter & operator++()
+		{
+			if (_block.idx == 0) // no valid block -> overflow-only container (or invalid iterator)
+			{
+				++_index_in_oflow;
+				return *this;
+			}
+			// if we can't move, transform this iterator into a past-the-end iterator
+			if (_index_in_oflow == _oflow_size - 1 && _index_in_block == _block.count - 1 && _block.next == 0)
+			{
+				if (_block.idx != 0) block_provider::store_block(_block.idx, _block.block);
+				_block = isam_impl::isam_block<TKey, TValue>(0);
+				_index_in_block = 1;
+				_index_in_oflow = 0;
+				return *this;
+			}
+			// find out whether to move inside overflow or inside the block
+			bool oflow_move; bool check_both = true;
+			if (_index_in_oflow == _oflow_size - 1) { oflow_move = false; check_both = false; }
+			if (_index_in_block == _block.count - 1 && _block.next == 0) { oflow_move = true; check_both = false; }
+			if (check_both)
+			{
+				if(_index_in_block == _block.count - 1)
+			}
+			if (oflow_move)
+			{
+				++_index_in_oflow;
+			}
+			else
+			{
+				if (_index_in_block == _block.count - 1)
+				{
+					size_t next_id = _block.next; // guaranteed to be non-0 here
+					if (_block.idx != 0) block_provider::store_block(_block.idx, _block.block);
+					_block = isam_impl::isam_block<TKey, TValue>(next_id);
+					_index_in_block = 0;
+				}
+				else ++_index_in_block;
+			}
+			return *this;
+		}
+
+		bool operator ==(const isam_iter& b) const
+		{
+			return (b._block.idx == _block.idx && b._index_in_block == _index_in_block && b._index_in_oflow == _index_in_oflow);
+		}
+
+		bool operator !=(const isam_iter& b) const
+		{
+			return !operator==(b);
+		}
+
+		std::pair<TKey, TValue>& operator *()
+		{
+			return *(operator->());
+		}
+
+		std::pair<TKey, TValue>* operator ->()
+		{
+			if (_block.idx == 0) return _oflow_ptr;
+			if (_index_in_oflow == _oflow_size - 1) return _block_ptr;
+			if (_oflow_ptr->first < _block_ptr->first) return _oflow_ptr;
+			return _block_ptr;
+		}
+
+		isam_iter() : _block(0), _index_in_block(1), _index_in_oflow(0) {} // end iterator constructor
+
+		isam_iter(size_t block, void* oflow_ptr, size_t oflow_size) : _block(block), _index_in_block(0), _index_in_oflow(0), _oflow_size(oflow_size)
+		{
+			_block = isam_impl::isam_block<TKey, TValue>(block);
+			_oflow_ptr = reinterpret_cast<std::pair<TKey, TValue>*> oflow_ptr;
+		}
+
+		~isam_iter()
+		{
+			if (_block.idx != 0) block_provider::store_block(_block.idx, _block.block);
+		}
+
+	private:
+		isam_impl::isam_block<TKey, TValue> _block;
+		size_t _index_in_block;
+		size_t _index_in_oflow;
+		std::pair<TKey, TValue>* _block_ptr;
+		std::pair<TKey, TValue>* _oflow_ptr;
+		size_t _oflow_size;
 	};
 
 	isam_iter begin()
 	{
-		// TODO
+		return isam_iter();
 	}
 
 	isam_iter end()
 	{
-		// TODO
+		return isam_iter(); // block idx == 0 && idx_in_block == 1 && idx_in_oflow == 0 indicates the end() iterator
 	}
 
 private:
