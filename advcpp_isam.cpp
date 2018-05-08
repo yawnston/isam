@@ -12,6 +12,10 @@ int main()
 	index0[7] = 14; //any records in the overflow space?
 
 	//cout << index0[2] << index0[5] << index0[7] << endl;
+	for (auto it = index0.begin(); it != index0.end(); ++it)
+	{
+		cout << it->first << ":" << it->second << " ";
+	}
 
 	isam<int, string*> index(1, 2);
 	index[5] = new string("5");
@@ -19,7 +23,7 @@ int main()
 	index[4] = new string("4"); //any records in the overflow space?
 	for (auto it = index.begin(); it != index.end(); ++it)
 	{
-		cout << it->first << ":" << *it->second << " ";
+		cout << it->first << ":" << *(it->second) << " ";
 	}
 	//output: 2:2 4:4 5:5
 
