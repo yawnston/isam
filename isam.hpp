@@ -9,11 +9,6 @@
 
 namespace isam_impl
 {
-	// Structure of block in memory:
-	// 1x 8b - count of items currently in the block
-	// 1x 8b - ID of next block
-	// capacity x sizeof(TKey, TValue) - payload
-
 	template<class TKey, class TValue>
 	struct isam_record
 	{
@@ -30,7 +25,10 @@ namespace isam_impl
 		}
 	};
 
-
+	// Structure of block in memory:
+	// 1x 8b - count of items currently in the block
+	// 1x 8b - ID of next block
+	// capacity x sizeof(TKey, TValue) - payload
 
 	template<class TKey, class TValue>
 	struct isam_block
@@ -40,6 +38,14 @@ namespace isam_impl
 		void* block;
 		size_t next;
 		size_t idx;
+
+		void set_next(size_t n)
+		{
+			auto bptr = reinterpret_cast<size_t*>(block);
+			++bptr;
+			*bptr = n;
+			next = n;
+		}
 
 		isam_block(size_t block_idx) : idx(block_idx) // Block stored in provider
 		{
@@ -64,6 +70,86 @@ namespace isam_impl
 			last = next;
 			++p;
 		}
+	}
+
+	template<class TKey, class TValue>
+	TValue& insert(void* block, TKey key)
+	{
+		auto stp = reinterpret_cast<size_t*>(block);
+		size_t count = *stp;
+		++(*stp); // increase count of items in this block
+		stp += 2; // skip block header
+		size_t new_elem_pos;
+		auto payload_ptr = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(stp);
+		auto data_start = payload_ptr;
+		isam_impl::isam_record<TKey, TValue> rec = *payload_ptr;
+
+		// block is empty -> insert at first positon
+		if (count == 0)
+		{
+			return put_record(payload_ptr, key);
+		}
+
+		// new item belongs to the front
+		if (key < rec.key) new_elem_pos = 0;
+
+		// new item belongs between two other items
+		for (size_t i = 0; i < count - 1; ++i)
+		{
+			if ((*payload_ptr).key < key && key < (*(payload_ptr + 1)).key)
+			{
+				new_elem_pos = i + 1;
+				break;
+			}
+			++payload_ptr;
+		}
+
+		// new item belongs at the end
+		if ((*payload_ptr).key < key) new_elem_pos = count;
+
+		data_start += new_elem_pos;
+		shift<TKey, TValue>(data_start, count - new_elem_pos); // move other elements to make space for the new one
+		return put_record(data_start, key);
+	}
+
+	// splits the elements from the first block between itself and the second one (empty), including a new element with key, returning a reference to the new elem's value
+	template<class TKey, class TValue>
+	TValue& split(void* fst, void* snd, TKey key)
+	{
+		auto fst_p = reinterpret_cast<size_t*>(fst); auto snd_p = reinterpret_cast<size_t*>(snd);
+		size_t count_fst = *fst_p; fst_p += 2; snd_p += 2;
+		auto fst_payload = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(fst_p);
+		auto snd_payload = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(snd_p);
+		fst_payload += ((count_fst / 2) + (count_fst % 2) - 1);
+		size_t copy_start_index; bool new_elem_left;
+		if (key < (*fst_payload).key) // copy the "middle" element as well because the new one is going on the left
+		{
+			copy_start_index = (count_fst / 2) + (count_fst % 2) - 1;
+			new_elem_left = true;
+		}
+		else // leave the "middle" element because the new one is going on the right
+		{
+			copy_start_index = (count_fst / 2) + (count_fst % 2);
+			new_elem_left = false;
+			++fst_payload;
+		}
+
+		// copy the appropriate amount of elements from left to right
+		size_t right_count = 0;
+		for (size_t i = copy_start_index; i < count_fst; ++i)
+		{
+			*snd_payload = *fst_payload;
+			++right_count;
+		}
+		*(reinterpret_cast<size_t*>(fst)) -= right_count;
+		*(reinterpret_cast<size_t*>(snd)) = right_count;
+
+		// insert the new element into the right block
+		void* new_elem_block;
+		if (new_elem_left) new_elem_block = fst;
+		else new_elem_block = snd;
+
+		return insert<TKey, TValue>(new_elem_block, key);
 	}
 }
 
@@ -148,9 +234,10 @@ private:
 				{
 					size_t new_block = block_provider::create_block(_block_real_size);
 					_current_block = isam_impl::isam_block<TKey, TValue>(new_block);
+					_current_block.set_next(0);
 					auto new_elem = add_to_current_block(elem.key);
 					new_elem = elem.val;
-					return;
+					continue;
 				}
 				// try to insert into the last block and increase its maximum
 				auto last_block = _index.rbegin();
@@ -163,24 +250,40 @@ private:
 					auto nh = _index.extract(_index.rbegin());
 					nh.key() = elem.key;
 					_index.insert(move(nh));
+					continue;
 				}
 				else // no room -> create new block
 				{
 					size_t new_block = block_provider::create_block(_block_real_size);
 					load_block(new_block);
+					_current_block.set_next(0);
 					auto new_elem = add_to_current_block(elem.key);
 					new_elem = elem.val;
-					return;
+					continue;
 				}
 			}
 			else // check if there is space for insertion
 			{
-
+				load_block((*block).second);
+				if (_current_block.count < _block_size) // there is room in the block
+				{
+					auto new_elem = add_to_current_block(elem.key);
+					new_elem = elem.val;
+					continue;
+				}
+				else // no room -> create new block and split elements in half
+				{
+					size_t new_block_id = block_provider::create_block(_block_real_size);
+					isam_impl::isam_block<TKey, TValue> new_block(new_block_id);
+					new_block.set_next(_current_block.next);
+					_current_block.set_next(new_block_id);
+					auto new_item = isam_impl::split<TKey, TValue>(_current_block.block, new_block.block, elem.key);
+					new_item = elem.val;
+					// increase the key of this block in the index
+					// insert new_block into the index with the proper key
+					continue;
+				}
 			}
-
-			// if not, create a new block
-			// select median of all elements of full block + new elem
-			// split the elements in half into the new blocks
 		}
 		_oflow_count = 0; _oflow.clear();
 	}
