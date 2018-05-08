@@ -73,6 +73,17 @@ namespace isam_impl
 	}
 
 	template<class TKey, class TValue>
+	TValue& put_record(isam_record<TKey, TValue>* p, TKey key)
+	{
+		auto key_p = reinterpret_cast<TKey*>(p);
+		*key_p = key;
+		++key_p;
+		auto val_p = reinterpret_cast<TValue*>(key_p);
+		new (val_p) TValue(); // in-place construction
+		return *val_p;
+	}
+
+	template<class TKey, class TValue>
 	TValue& insert(void* block, TKey key)
 	{
 		auto stp = reinterpret_cast<size_t*>(block);
@@ -150,6 +161,18 @@ namespace isam_impl
 		else new_elem_block = snd;
 
 		return insert<TKey, TValue>(new_elem_block, key);
+	}
+
+	// get maximum key from the given non-empty block
+	template<class TKey, class TValue>
+	TKey get_max(void* block)
+	{
+		auto stp = reinterpret_cast<size_t*>(block);
+		size_t count = *stp;
+		stp += 2;
+		auto payload_ptr = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(stp);
+		payload_ptr += (count - 1);
+		return (*payload_ptr).key;
 	}
 }
 
@@ -237,6 +260,7 @@ private:
 					_current_block.set_next(0);
 					auto new_elem = add_to_current_block(elem.key);
 					new_elem = elem.val;
+					_index[elem.key] = new_block;
 					continue;
 				}
 				// try to insert into the last block and increase its maximum
@@ -255,10 +279,12 @@ private:
 				else // no room -> create new block
 				{
 					size_t new_block = block_provider::create_block(_block_real_size);
+					_current_block.set_next(new_block);
 					load_block(new_block);
 					_current_block.set_next(0);
 					auto new_elem = add_to_current_block(elem.key);
 					new_elem = elem.val;
+					_index[elem.key] = new_block;
 					continue;
 				}
 			}
@@ -281,6 +307,13 @@ private:
 					new_item = elem.val;
 					// increase the key of this block in the index
 					// insert new_block into the index with the proper key
+					size_t max_l = isam_impl::get_max<TKey, TValue>(_current_block.block);
+					size_t max_r = isam_impl::get_max<TKey, TValue>(new_block.block);
+					auto nh = _index.extract();
+					nh.key() = max_l;
+					_index.insert(move(nh));
+					_index[max_r] = new_block_id;
+					block_provider::store_block(new_block_id, new_block.block);
 					continue;
 				}
 			}
@@ -322,54 +355,12 @@ private:
 		return nullptr;
 	}
 
-	TValue& put_record(isam_impl::isam_record<TKey, TValue>* p, TKey key)
-	{
-		auto key_p = reinterpret_cast<TKey*>(p);
-		*key_p = key;
-		++key_p;
-		auto val_p = reinterpret_cast<TValue*>(key_p);
-		new (val_p) TValue(); // in-place construction
-		_current_block.count += 1;
-		return *val_p;
-	}
-
 	// presumes that there is space in the block for inserting (undefined behavior for full block)
 	TValue& add_to_current_block(TKey key)
 	{
-		auto stp = reinterpret_cast<size_t*>(_current_block.block);
-		++(*stp); // increase count of items in this block
-		stp += 2; // skip block header
-		size_t new_elem_pos;
-		auto payload_ptr = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(stp);
-		auto data_start = payload_ptr;
-		isam_impl::isam_record<TKey, TValue> rec = *payload_ptr;
-
-		// block is empty -> insert at first positon
-		if (_current_block.count == 0)
-		{
-			return put_record(payload_ptr, key);
-		}
-
-		// new item belongs to the front
-		if (key < rec.key) new_elem_pos = 0;
-
-		// new item belongs between two other items
-		for (size_t i = 0; i < _current_block.count - 1; ++i)
-		{
-			if ((*payload_ptr).key < key && key < (*(payload_ptr + 1)).key)
-			{
-				new_elem_pos = i + 1;
-				break;
-			}
-			++payload_ptr;
-		}
-
-		// new item belongs at the end
-		if ((*payload_ptr).key < key) new_elem_pos = _current_block.count;
-
-		data_start += new_elem_pos;
-		isam_impl::shift<TKey, TValue>(data_start, _current_block.count - new_elem_pos); // move other elements to make space for the new one
-		return put_record(data_start, key);
+		auto new_elem = isam_impl::insert<TKey, TValue>(_current_block.block, key);
+		_current_block.count += 1;
+		return new_elem;
 	}
 
 	void load_block(size_t id)
