@@ -232,13 +232,9 @@ public:
 
 		isam_iter & operator++()
 		{
-			if (_block.idx == 0) // no valid block -> overflow-only container (or invalid iterator)
-			{
-				++_index_in_oflow;
-				return *this;
-			}
+			_skip_block_item = false;
 			// if we can't move, transform this iterator into a past-the-end iterator
-			if (_index_in_oflow == _oflow_size - 1 && _index_in_block == _block.count - 1 && _block.next == 0)
+			if ((_block.idx == 0 || (_block.next == 0 && _index_in_block == _block.count - 1)) && _index_in_oflow == _oflow_size)
 			{
 				if (_block.idx != 0) block_provider::store_block(_block.idx, _block.block);
 				_block = isam_impl::isam_block<TKey, TValue>(0);
@@ -246,9 +242,16 @@ public:
 				_index_in_oflow = 0;
 				return *this;
 			}
+			if (_block.idx == 0) // no valid block -> overflow-only container (or invalid iterator)
+			{
+				++_index_in_oflow;
+				if (_index_in_oflow != 1) ++_oflow_it;
+				return *this;
+			}
 			// find out whether to move inside overflow or inside the block
 			bool oflow_move; bool check_both = true; auto it = _oflow_it; bool moved_blocks = false;
-			if (_index_in_oflow == _oflow_size - 1) { oflow_move = false; check_both = false; }
+			if (_index_in_oflow != 0) ++it;
+			if (_index_in_oflow == _oflow_size) { oflow_move = false; check_both = false; }
 			if (_index_in_block == _block.count - 1 && _block.next == 0) { oflow_move = true; check_both = false; }
 			if (check_both)
 			{
@@ -257,19 +260,20 @@ public:
 					moved_blocks = true;
 					size_t prev_idx = _block.idx;
 					load_next_block();
-					oflow_move = ((++it)->first < (_block_ptr)->first);
-					if (oflow_move) load_prev_block(prev_idx); // rollback the block move
+					oflow_move = ((it)->first < (_block_ptr)->first);
+					if (oflow_move) { load_prev_block(prev_idx); _skip_block_item = true; } // rollback the block move
 				}
-				else oflow_move = ((++it)->first < (_block_ptr + 1)->first);
+				else oflow_move = ((it)->first < (_block_ptr + 1)->first);
 			}
 			if (oflow_move)
 			{
+				if (_index_in_block == _block.count - 1 && _block.next == 0) load_next_block();
 				++_index_in_oflow;
-				++_oflow_it;
+				if(_index_in_oflow != 1) ++_oflow_it;
 			}
 			else
 			{
-				if (_index_in_block == _block.count - 1) load_next_block();
+				if (_index_in_block == _block.count - 1 && !moved_blocks) load_next_block();
 				else if(!moved_blocks)
 				{
 					++_index_in_block;
@@ -296,8 +300,8 @@ public:
 
 		isam_impl::isam_record<TKey, TValue>* operator ->()
 		{
-			if (_block.idx == 0) return isam_impl::to_pair_ptr<TKey, TValue>(_oflow_it);
-			//if (_index_in_oflow == _oflow_size - 1) return _block_ptr;
+			if (_block.idx == 0 || _skip_block_item) return isam_impl::to_pair_ptr<TKey, TValue>(_oflow_it);
+			if (_index_in_oflow == _oflow_size) return _block_ptr;
 			if (_oflow_it->first < _block_ptr->first) return isam_impl::to_pair_ptr<TKey, TValue>(_oflow_it);
 			return _block_ptr;
 		}
@@ -324,12 +328,14 @@ public:
 		isam_impl::isam_record<TKey, TValue>* _block_ptr;
 		typename std::set<isam_impl::isam_record<TKey, TValue>>::iterator _oflow_it;
 		size_t _oflow_size;
+		bool _skip_block_item = false;
 
 		void load_next_block()
 		{
-			size_t next_id = _block.next; // guaranteed to be non-0 here
+			size_t next_id = _block.next;
 			if (_block.idx != 0) block_provider::store_block(_block.idx, _block.block);
 			_block = isam_impl::isam_block<TKey, TValue>(next_id);
+			if (next_id == 0) return;
 			_index_in_block = 0;
 			size_t* skipper = (reinterpret_cast<size_t*>(_block.block) + 2);
 			_block_ptr = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(skipper);
