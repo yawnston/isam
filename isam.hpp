@@ -349,7 +349,7 @@ public:
 	{
 		size_t id;
 		auto first = _index.begin();
-		id = first == _index.end() ? 0 : first->first;
+		id = first == _index.end() ? 0 : first->second;
 		return isam_iter(id, _oflow.begin(), _oflow_count);
 	}
 
