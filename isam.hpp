@@ -247,6 +247,7 @@ private:
 	// insert the overflow records into the main file
 	void push_oflow()
 	{
+		load_block(0);
 		for (auto&& elem : _oflow)
 		{
 			// check if there is space in an existing block
@@ -258,7 +259,7 @@ private:
 					size_t new_block = block_provider::create_block(_block_real_size);
 					_current_block = isam_impl::isam_block<TKey, TValue>(new_block);
 					_current_block.set_next(0);
-					auto new_elem = add_to_current_block(elem.key);
+					TValue& new_elem = add_to_current_block(elem.key);
 					new_elem = elem.val;
 					_index[elem.key] = new_block;
 					continue;
@@ -268,12 +269,11 @@ private:
 				load_block((*last_block).second);
 				if (_current_block.count < _block_size) // there is room in the block
 				{
-					auto new_elem = add_to_current_block(elem.key);
+					TValue& new_elem = add_to_current_block(elem.key);
 					new_elem = elem.val;
 					// increase the key of this block in the index
-					auto nh = _index.extract(_index.rbegin());
-					nh.key() = elem.key;
-					_index.insert(move(nh));
+					_index.erase((++(_index.rbegin())).base());
+					_index[elem.key] = _current_block.idx;
 					continue;
 				}
 				else // no room -> create new block
@@ -282,7 +282,7 @@ private:
 					_current_block.set_next(new_block);
 					load_block(new_block);
 					_current_block.set_next(0);
-					auto new_elem = add_to_current_block(elem.key);
+					TValue& new_elem = add_to_current_block(elem.key);
 					new_elem = elem.val;
 					_index[elem.key] = new_block;
 					continue;
@@ -293,25 +293,25 @@ private:
 				load_block((*block).second);
 				if (_current_block.count < _block_size) // there is room in the block
 				{
-					auto new_elem = add_to_current_block(elem.key);
+					TValue& new_elem = add_to_current_block(elem.key);
 					new_elem = elem.val;
 					continue;
 				}
 				else // no room -> create new block and split elements in half
 				{
+					TKey curr_key = isam_impl::get_max<TKey, TValue>(_current_block.block);
 					size_t new_block_id = block_provider::create_block(_block_real_size);
 					isam_impl::isam_block<TKey, TValue> new_block(new_block_id);
 					new_block.set_next(_current_block.next);
 					_current_block.set_next(new_block_id);
-					auto new_item = isam_impl::split<TKey, TValue>(_current_block.block, new_block.block, elem.key);
+					TValue& new_item = isam_impl::split<TKey, TValue>(_current_block.block, new_block.block, elem.key);
 					new_item = elem.val;
 					// increase the key of this block in the index
 					// insert new_block into the index with the proper key
 					size_t max_l = isam_impl::get_max<TKey, TValue>(_current_block.block);
 					size_t max_r = isam_impl::get_max<TKey, TValue>(new_block.block);
-					auto nh = _index.extract();
-					nh.key() = max_l;
-					_index.insert(move(nh));
+					_index.erase(curr_key);
+					_index[max_l] = _current_block.idx;
 					_index[max_r] = new_block_id;
 					block_provider::store_block(new_block_id, new_block.block);
 					continue;
@@ -358,9 +358,8 @@ private:
 	// presumes that there is space in the block for inserting (undefined behavior for full block)
 	TValue& add_to_current_block(TKey key)
 	{
-		auto new_elem = isam_impl::insert<TKey, TValue>(_current_block.block, key);
 		_current_block.count += 1;
-		return new_elem;
+		return isam_impl::insert<TKey, TValue>(_current_block.block, key);
 	}
 
 	void load_block(size_t id)
