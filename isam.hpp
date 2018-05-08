@@ -89,13 +89,9 @@ public:
 			return const_cast<TValue&>(ref); // val is not used for sorting -> const_cast will not break the set
 		}
 
-		if (block != _index.end())
+		if (block != _index.end()) // FIXME: inserting key that is larger than all existing ones
 		{
-			if ((*block).second != _current_block.idx) // get a new block if we don't want the one we have right now
-			{
-				push_current_block();
-				_current_block = isam_impl::isam_block<TKey, TValue>((*block).second);
-			}
+			load_block((*block).second);
 			auto result = try_get_value(key);
 			if (result != nullptr) return *result;
 
@@ -110,7 +106,7 @@ public:
 		return add_to_oflow(key);
 	}
 
-	isam(size_t block_size, size_t oflow_size) : _block_size(block_size), _oflow_size(oflow_size), _current_block(0)
+	isam(size_t block_size, size_t oflow_size) : _block_size(block_size), _oflow_size(oflow_size), _current_block(0), _block_real_size(16 + (block_size * sizeof(isam_impl::isam_record<TKey, TValue>)))
 	{
 		_oflow = std::set<isam_impl::isam_record<TKey, TValue>>();
 	}
@@ -131,9 +127,10 @@ public:
 	}
 
 private:
-	std::map<TKey, size_t, std::less<TKey>> _index = std::map<TKey, size_t, std::less<TKey>>(); // Maps TKeys to block IDs
+	std::map<TKey, size_t> _index = std::map<TKey, size_t>(); // Maps TKeys to block IDs
 	std::set<isam_impl::isam_record<TKey, TValue>> _oflow; // TKeys are guaranteed to not contain duplicates
 	size_t _block_size; // Number of (TKey, TValue) records
+	size_t _block_real_size; // Number of bytes
 	size_t _oflow_size;
 	size_t _oflow_count = 0;
 	isam_impl::isam_block<TKey, TValue> _current_block;
@@ -143,7 +140,47 @@ private:
 	{
 		for (auto&& elem : _oflow)
 		{
-			// insert elem
+			// check if there is space in an existing block
+			auto block = _index.upper_bound(elem.key);
+			if (block == _index.end()) // we are inserting a key that is larger than all existing ones
+			{
+				if (_index.rbegin() == _index.rend()) // the index is empty -> create new block
+				{
+					size_t new_block = block_provider::create_block(_block_real_size);
+					_current_block = isam_impl::isam_block<TKey, TValue>(new_block);
+					auto new_elem = add_to_current_block(elem.key);
+					new_elem = elem.val;
+					return;
+				}
+				// try to insert into the last block and increase its maximum
+				auto last_block = _index.rbegin();
+				load_block((*last_block).second);
+				if (_current_block.count < _block_size) // there is room in the block
+				{
+					auto new_elem = add_to_current_block(elem.key);
+					new_elem = elem.val;
+					// increase the key of this block in the index
+					auto nh = _index.extract(_index.rbegin());
+					nh.key() = elem.key;
+					_index.insert(move(nh));
+				}
+				else // no room -> create new block
+				{
+					size_t new_block = block_provider::create_block(_block_real_size);
+					load_block(new_block);
+					auto new_elem = add_to_current_block(elem.key);
+					new_elem = elem.val;
+					return;
+				}
+			}
+			else // check if there is space for insertion
+			{
+
+			}
+
+			// if not, create a new block
+			// select median of all elements of full block + new elem
+			// split the elements in half into the new blocks
 		}
 		_oflow_count = 0; _oflow.clear();
 	}
@@ -230,6 +267,15 @@ private:
 		data_start += new_elem_pos;
 		isam_impl::shift<TKey, TValue>(data_start, _current_block.count - new_elem_pos); // move other elements to make space for the new one
 		return put_record(data_start, key);
+	}
+
+	void load_block(size_t id)
+	{
+		if (id != _current_block.idx)
+		{
+			if (_current_block.idx != 0) push_current_block();
+			_current_block = isam_impl::isam_block<TKey, TValue>(id);
+		}
 	}
 
 	// writes the current block back into the provider
