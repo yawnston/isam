@@ -174,6 +174,12 @@ namespace isam_impl
 		payload_ptr += (count - 1);
 		return (*payload_ptr).key;
 	}
+
+	template<class TKey, class TValue>
+	std::pair<TKey, TValue>* to_pair_ptr(typename std::set<isam_impl::isam_record<TKey, TValue>>::iterator it)
+	{
+		return (std::pair<TKey, TValue>*)(&(*it));
+	}
 }
 
 // TKey: simple value type, no duplicates, comparable: operator<
@@ -241,27 +247,34 @@ public:
 				return *this;
 			}
 			// find out whether to move inside overflow or inside the block
-			bool oflow_move; bool check_both = true;
+			bool oflow_move; bool check_both = true; auto it = _oflow_it; bool moved_blocks = false;
 			if (_index_in_oflow == _oflow_size - 1) { oflow_move = false; check_both = false; }
 			if (_index_in_block == _block.count - 1 && _block.next == 0) { oflow_move = true; check_both = false; }
 			if (check_both)
 			{
-				if(_index_in_block == _block.count - 1)
+				if (_index_in_block == _block.count - 1)
+				{
+					moved_blocks = true;
+					size_t prev_idx = _block.idx;
+					load_next_block();
+					oflow_move = ((++it)->key < (_block_ptr)->first);
+					if (oflow_move) load_prev_block(prev_idx); // rollback the block move
+				}
+				else oflow_move = ((++it)->key < (_block_ptr + 1)->first);
 			}
 			if (oflow_move)
 			{
 				++_index_in_oflow;
+				++_oflow_it;
 			}
 			else
 			{
-				if (_index_in_block == _block.count - 1)
+				if (_index_in_block == _block.count - 1) load_next_block();
+				else if(!moved_blocks)
 				{
-					size_t next_id = _block.next; // guaranteed to be non-0 here
-					if (_block.idx != 0) block_provider::store_block(_block.idx, _block.block);
-					_block = isam_impl::isam_block<TKey, TValue>(next_id);
-					_index_in_block = 0;
+					++_index_in_block;
+					++_block_ptr;
 				}
-				else ++_index_in_block;
 			}
 			return *this;
 		}
@@ -283,18 +296,18 @@ public:
 
 		std::pair<TKey, TValue>* operator ->()
 		{
-			if (_block.idx == 0) return _oflow_ptr;
+			if (_block.idx == 0) return isam_impl::to_pair_ptr<TKey, TValue>(_oflow_it);
 			if (_index_in_oflow == _oflow_size - 1) return _block_ptr;
-			if (_oflow_ptr->first < _block_ptr->first) return _oflow_ptr;
+			if (_oflow_it->key < _block_ptr->first) return isam_impl::to_pair_ptr<TKey, TValue>(_oflow_it);
 			return _block_ptr;
 		}
 
 		isam_iter() : _block(0), _index_in_block(1), _index_in_oflow(0) {} // end iterator constructor
 
-		isam_iter(size_t block, void* oflow_ptr, size_t oflow_size) : _block(block), _index_in_block(0), _index_in_oflow(0), _oflow_size(oflow_size)
+		isam_iter(size_t block, typename std::set<isam_impl::isam_record<TKey, TValue>>::iterator o_it, size_t oflow_size) : _block(block), _index_in_block(0), _index_in_oflow(0), _oflow_size(oflow_size)
 		{
 			_block = isam_impl::isam_block<TKey, TValue>(block);
-			_oflow_ptr = reinterpret_cast<std::pair<TKey, TValue>*> oflow_ptr;
+			_oflow_it = o_it;
 		}
 
 		~isam_iter()
@@ -307,13 +320,35 @@ public:
 		size_t _index_in_block;
 		size_t _index_in_oflow;
 		std::pair<TKey, TValue>* _block_ptr;
-		std::pair<TKey, TValue>* _oflow_ptr;
+		typename std::set<isam_impl::isam_record<TKey, TValue>>::iterator _oflow_it;
 		size_t _oflow_size;
+
+		void load_next_block()
+		{
+			size_t next_id = _block.next; // guaranteed to be non-0 here
+			if (_block.idx != 0) block_provider::store_block(_block.idx, _block.block);
+			_block = isam_impl::isam_block<TKey, TValue>(next_id);
+			_index_in_block = 0;
+			size_t* skipper = (reinterpret_cast<size_t*>(_block.block) + 2);
+			_block_ptr = reinterpret_cast<std::pair<TKey, TValue>*>(skipper);
+		}
+
+		void load_prev_block(size_t prev)
+		{
+			if (_block.idx != 0) block_provider::store_block(_block.idx, _block.block);
+			_block = isam_impl::isam_block<TKey, TValue>(prev);
+			_index_in_block = _block.count - 1;
+			size_t* skipper = (reinterpret_cast<size_t*>(_block.block) + 2);
+			_block_ptr = (reinterpret_cast<std::pair<TKey, TValue>*>(skipper) + _index_in_block);
+		}
 	};
 
 	isam_iter begin()
 	{
-		return isam_iter();
+		size_t id;
+		auto first = _index.begin();
+		id = first == _index.end() ? 0 : first->first;
+		return isam_iter(id, _oflow.begin(), _oflow_count);
 	}
 
 	isam_iter end()
