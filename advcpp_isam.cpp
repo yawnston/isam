@@ -5,7 +5,7 @@
 using namespace std;
 
 int main()
-{
+{/*
 	isam<int, int> index0(1, 2);
 	index0[5] = 6;
 	index0[2] = 3;
@@ -34,6 +34,24 @@ int main()
 	{ auto it = index2.begin(); it->second = 2; }
 	cout << index2[1] << endl;
 	//output: 2
+	*/
+	isam<int, string*> index3(3, 1);
+	index3[5] = new string("E");
+	index3[2] = new string("B");
+	index3[4] = new string("D");
+	index3[1] = new string("A");
+	index3[6] = new string("F");
+	index3[7] = new string("G");
+	index3[3] = new string("C");
+	for (auto e : index3)
+	{
+		*(e.second) += string("X");
+	}
+	cout << *(index3[4]) << endl;
+	for (auto it = index3.begin(); it != index3.end(); ++it)
+	{
+		cout << it->first << ":" << *(it->second) << " ";
+	}
 	
     return 0;
 }
