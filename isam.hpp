@@ -81,6 +81,14 @@ public:
 		auto block = _index.lower_bound(key);
 
 		// in case the key exists in the container, returns the value
+		// check overflow space first
+		auto oflow_result = _oflow.find(isam_impl::isam_record<TKey, TValue>(key));
+		if (oflow_result != _oflow.end())
+		{
+			const TValue& ref = (*oflow_result).val;
+			return const_cast<TValue&>(ref); // val is not used for sorting -> const_cast will not break the set
+		}
+
 		if (block != _index.end())
 		{
 			if ((*block).second != _current_block.idx) // get a new block if we don't want the one we have right now
@@ -130,9 +138,14 @@ private:
 	size_t _oflow_count = 0;
 	isam_impl::isam_block<TKey, TValue> _current_block;
 
+	// insert the overflow records into the main file
 	void push_oflow()
 	{
-		// TODO
+		for (auto&& elem : _oflow)
+		{
+			// insert elem
+		}
+		_oflow_count = 0; _oflow.clear();
 	}
 
 	TValue& add_to_oflow(TKey key)
