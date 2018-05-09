@@ -10,18 +10,11 @@
 namespace isam_impl
 {
 	template<class TKey, class TValue>
-	struct isam_record
+	struct ComparePairFst
 	{
-	public:
-		TKey first;
-		TValue second;
-
-		isam_record() {}
-		isam_record(TKey k) : first(k), second() {} // Block stored in memory
-
-		friend bool operator<(const isam_record& lhs, const isam_record& rhs)
+		bool operator ()(const std::pair<TKey, TValue>& p1, const std::pair<TKey, TValue>& p2) const
 		{
-			return lhs.first < rhs.first;
+			return p1.first < p2.first;
 		}
 	};
 
@@ -57,23 +50,8 @@ namespace isam_impl
 		}
 	};
 
-	// starting at p, moves count records to the right by one
 	template<class TKey, class TValue>
-	void shift(isam_record<TKey, TValue>* p, size_t count)
-	{
-		isam_record<TKey, TValue> last, next;
-		last = *p; ++p;
-		for (size_t i = 0; i < count; ++i)
-		{
-			next = *p;
-			*p = last;
-			last = next;
-			++p;
-		}
-	}
-
-	template<class TKey, class TValue>
-	TValue& put_record(isam_record<TKey, TValue>* p, TKey key)
+	TValue& put_record(std::pair<TKey, TValue>* p, TKey key)
 	{
 		auto key_p = reinterpret_cast<TKey*>(p);
 		*key_p = key;
@@ -83,6 +61,22 @@ namespace isam_impl
 		return *val_p;
 	}
 
+	// starting at p, moves count records to the right by one
+	template<class TKey, class TValue>
+	void shift(std::pair<TKey, TValue>* p, size_t count)
+	{
+		std::pair<TKey, TValue> last, next;
+		last = *p; ++p;
+		for (size_t i = 0; i < count; ++i)
+		{
+			next = *p;
+			//*p = last;
+			put_record<TKey, TValue>(p, last.first) = last.second;
+			last = next;
+			++p;
+		}
+	}
+
 	template<class TKey, class TValue>
 	TValue& insert(void* block, TKey key)
 	{
@@ -90,10 +84,10 @@ namespace isam_impl
 		size_t count = *stp;
 		++(*stp); // increase count of items in this block
 		stp += 2; // skip block header
-		size_t new_elem_pos;
-		auto payload_ptr = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(stp);
+		size_t new_elem_pos = 0;
+		auto payload_ptr = reinterpret_cast<std::pair<TKey, TValue>*>(stp);
 		auto data_start = payload_ptr;
-		isam_impl::isam_record<TKey, TValue> rec = *payload_ptr;
+		std::pair<TKey, TValue> rec = *payload_ptr;
 
 		// block is empty -> insert at first positon
 		if (count == 0)
@@ -116,7 +110,7 @@ namespace isam_impl
 		}
 
 		// new item belongs at the end
-		if ((*payload_ptr).first < key) new_elem_pos = count;
+		if (new_elem_pos == 0 && (*payload_ptr).first < key) new_elem_pos = count;
 
 		data_start += new_elem_pos;
 		shift<TKey, TValue>(data_start, count - new_elem_pos); // move other elements to make space for the new one
@@ -129,8 +123,8 @@ namespace isam_impl
 	{
 		auto fst_p = reinterpret_cast<size_t*>(fst); auto snd_p = reinterpret_cast<size_t*>(snd);
 		size_t count_fst = *fst_p; fst_p += 2; snd_p += 2;
-		auto fst_payload = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(fst_p);
-		auto snd_payload = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(snd_p);
+		auto fst_payload = reinterpret_cast<std::pair<TKey, TValue>*>(fst_p);
+		auto snd_payload = reinterpret_cast<std::pair<TKey, TValue>*>(snd_p);
 		fst_payload += ((count_fst / 2) + (count_fst % 2) - 1);
 		size_t copy_start_index; bool new_elem_left;
 		if (key < (*fst_payload).first) // copy the "middle" element as well because the new one is going on the left
@@ -149,7 +143,8 @@ namespace isam_impl
 		size_t right_count = 0;
 		for (size_t i = copy_start_index; i < count_fst; ++i)
 		{
-			*snd_payload = *fst_payload;
+			//*snd_payload = *fst_payload;
+			put_record<TKey, TValue>(snd_payload, fst_payload->first) = fst_payload->second;
 			++right_count;
 			++snd_payload; ++fst_payload;
 		}
@@ -171,15 +166,15 @@ namespace isam_impl
 		auto stp = reinterpret_cast<size_t*>(block);
 		size_t count = *stp;
 		stp += 2;
-		auto payload_ptr = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(stp);
+		auto payload_ptr = reinterpret_cast<std::pair<TKey, TValue>*>(stp);
 		payload_ptr += (count - 1);
 		return (*payload_ptr).first;
 	}
 
 	template<class TKey, class TValue>
-	isam_impl::isam_record<TKey, TValue>* to_pair_ptr(typename std::set<isam_impl::isam_record<TKey, TValue>>::iterator it)
+	std::pair<TKey, TValue>* to_pair_ptr(typename std::set<std::pair<TKey, TValue>, isam_impl::ComparePairFst<TKey, TValue>>::iterator it)
 	{
-		return const_cast<isam_impl::isam_record<TKey, TValue>*>(&(*it));
+		return const_cast<std::pair<TKey, TValue>*>(&(*it));
 	}
 }
 
@@ -191,14 +186,12 @@ class isam
 public:
 	TValue & operator[](TKey key)
 	{
-		// FIXME: iterator and indexer writes at the same time?
-
 		// find appropriate block in the primary file using the index
 		auto block = _index.lower_bound(key);
 
 		// in case the key exists in the container, returns the value
 		// check overflow space first
-		auto oflow_result = _oflow.find(isam_impl::isam_record<TKey, TValue>(key));
+		auto oflow_result = _oflow.find(std::pair<TKey, TValue>(key, TValue())); // !!!
 		if (oflow_result != _oflow.end())
 		{
 			const TValue& ref = (*oflow_result).second;
@@ -222,14 +215,28 @@ public:
 		return add_to_oflow(key);
 	}
 
-	isam(size_t block_size, size_t oflow_size) : _block_size(block_size), _oflow_size(oflow_size), _current_block(0), _block_real_size(16 + (block_size * sizeof(isam_impl::isam_record<TKey, TValue>)))
+	isam(size_t block_size, size_t oflow_size) : _block_size(block_size), _oflow_size(oflow_size), _current_block(0)
 	{
-		_oflow = std::set<isam_impl::isam_record<TKey, TValue>>();
+		_oflow = std::set<std::pair<TKey, TValue>, isam_impl::ComparePairFst<TKey, TValue>>();
+		_block_real_size = 16 + (block_size * sizeof(std::pair<TKey, TValue>));
+	}
+
+	isam(const isam&) = delete;
+
+	~isam()
+	{
+		if (_current_block.idx != 0) push_current_block();
 	}
 
 	class isam_iter
 	{
 	public:
+		typedef isam_iter self_type;
+		typedef std::pair<TKey, TValue> value_type;
+		typedef std::pair<TKey, TValue>& reference;
+		typedef std::pair<TKey, TValue>* pointer;
+		typedef std::forward_iterator_tag iterator_category;
+		typedef ptrdiff_t difference_type;
 
 		isam_iter & operator++()
 		{
@@ -265,6 +272,13 @@ public:
 			return *this;
 		}
 
+		isam_iter operator++(int) // postfix variant
+		{
+			isam_iter result(*this);
+			++(*this);
+			return result;
+		}
+
 		bool operator ==(const isam_iter& b) const
 		{
 			return (b._block.idx == _block.idx && b._index_in_block == _index_in_block && b._index_in_oflow == _index_in_oflow);
@@ -275,12 +289,29 @@ public:
 			return !operator==(b);
 		}
 
-		isam_impl::isam_record<TKey, TValue>& operator *()
+		isam_iter& operator=(const isam_iter& i)
+		{
+			_index_in_block = i._index_in_block;
+			_index_in_oflow = i._index_in_oflow;
+			_oflow_size = i._oflow_size;
+			_oflow_it = i._oflow_it;
+			if (_block.idx != 0) block_provider::store_block(_block.idx, _block.block);
+			_block = isam_impl::isam_block<TKey, TValue>(i._block.idx);
+			if (_block.idx != 0) // set the block ptr to the correct element
+			{
+				size_t* skipper = (reinterpret_cast<size_t*>(_block.block) + 2);
+				_block_ptr = reinterpret_cast<std::pair<TKey, TValue>*>(skipper);
+				_block_ptr += _index_in_block;
+			}
+			return *this;
+		}
+
+		std::pair<TKey, TValue>& operator *() const
 		{
 			return *(operator->());
 		}
 
-		isam_impl::isam_record<TKey, TValue>* operator ->()
+		std::pair<TKey, TValue>* operator ->() const
 		{
 			if (_block.idx == 0) return isam_impl::to_pair_ptr<TKey, TValue>(_oflow_it);
 			if (_index_in_oflow == _oflow_size) return _block_ptr;
@@ -290,13 +321,17 @@ public:
 
 		isam_iter() : _block(0), _index_in_block(1), _index_in_oflow(0) {} // end iterator constructor
 
-		isam_iter(size_t block, typename std::set<isam_impl::isam_record<TKey, TValue>>::iterator o_it, size_t oflow_size) : _block(block), _index_in_block(0), _index_in_oflow(0), _oflow_size(oflow_size)
+		isam_iter(const isam_iter& i) : isam_iter() // copy constructor
+		{
+			operator=(i);
+		}
+
+		isam_iter(size_t block, typename std::set<std::pair<TKey, TValue>, isam_impl::ComparePairFst<TKey, TValue>>::iterator o_it, size_t oflow_size) : _block(block), _index_in_block(0), _index_in_oflow(0), _oflow_size(oflow_size)
 		{
 			if (block == 0 && oflow_size == 0) _index_in_block = 1;
-			_block = isam_impl::isam_block<TKey, TValue>(block);
 			_oflow_it = o_it;
 			size_t* skipper = (reinterpret_cast<size_t*>(_block.block) + 2);
-			_block_ptr = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(skipper);
+			_block_ptr = reinterpret_cast<std::pair<TKey, TValue>*>(skipper);
 		}
 
 		~isam_iter()
@@ -308,8 +343,8 @@ public:
 		isam_impl::isam_block<TKey, TValue> _block;
 		size_t _index_in_block;
 		size_t _index_in_oflow;
-		isam_impl::isam_record<TKey, TValue>* _block_ptr;
-		typename std::set<isam_impl::isam_record<TKey, TValue>>::iterator _oflow_it;
+		std::pair<TKey, TValue>* _block_ptr;
+		typename std::set<std::pair<TKey, TValue>, isam_impl::ComparePairFst<TKey, TValue>>::iterator _oflow_it;
 		size_t _oflow_size;
 
 		void load_next_block()
@@ -320,21 +355,13 @@ public:
 			if (next_id == 0) return;
 			_index_in_block = 0;
 			size_t* skipper = (reinterpret_cast<size_t*>(_block.block) + 2);
-			_block_ptr = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(skipper);
-		}
-
-		void load_prev_block(size_t prev)
-		{
-			if (_block.idx != 0) block_provider::store_block(_block.idx, _block.block);
-			_block = isam_impl::isam_block<TKey, TValue>(prev);
-			_index_in_block = _block.count - 1;
-			size_t* skipper = (reinterpret_cast<size_t*>(_block.block) + 2);
-			_block_ptr = (reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(skipper) + _index_in_block);
+			_block_ptr = reinterpret_cast<std::pair<TKey, TValue>*>(skipper);
 		}
 	};
 
 	isam_iter begin()
 	{
+		load_block(0); // push any current changes in the loaded block before creating the iterator
 		size_t id;
 		auto first = _index.begin();
 		id = first == _index.end() ? 0 : first->second;
@@ -348,7 +375,7 @@ public:
 
 private:
 	std::map<TKey, size_t> _index = std::map<TKey, size_t>(); // Maps TKeys to block IDs
-	std::set<isam_impl::isam_record<TKey, TValue>> _oflow; // TKeys are guaranteed to not contain duplicates
+	std::set<std::pair<TKey, TValue>, isam_impl::ComparePairFst<TKey, TValue>> _oflow; // TKeys are guaranteed to not contain duplicates
 	size_t _block_size; // Number of (TKey, TValue) records
 	size_t _block_real_size; // Number of bytes
 	size_t _oflow_size;
@@ -438,19 +465,19 @@ private:
 		{
 			push_oflow();
 		}
-		_oflow.insert(isam_impl::isam_record<TKey, TValue>(key));
+		_oflow.insert(std::pair<TKey, TValue>(key, TValue()));
 		++_oflow_count;
-		const TValue& ref = (*(_oflow.find(isam_impl::isam_record<TKey, TValue>(key)))).second;
+		const TValue& ref = (*(_oflow.find(std::pair<TKey, TValue>(key, TValue())))).second;
 		return const_cast<TValue&>(ref); // val is not used for sorting -> const_cast will not break the set
 	}
 
 	// tries to retrieve given value from the current block, returns nullptr if it fails
-	TValue* try_get_value(TKey key)
+	TValue* try_get_value(TKey key) const
 	{
 		auto stp = reinterpret_cast<size_t*>(_current_block.block);
 		stp += 2; // skip header of the block
-		auto payload_ptr = reinterpret_cast<isam_impl::isam_record<TKey, TValue>*>(stp);
-		isam_impl::isam_record<TKey, TValue> rec;
+		auto payload_ptr = reinterpret_cast<std::pair<TKey, TValue>*>(stp);
+		std::pair<TKey, TValue> rec;
 		for (size_t i = 0; i < _current_block.count; ++i)
 		{
 			rec = *payload_ptr;
